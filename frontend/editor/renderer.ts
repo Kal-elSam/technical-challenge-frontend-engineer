@@ -3,8 +3,9 @@
 // cells) as cheap to paint as 10x10, since visible cell count is bounded by
 // canvas size / cellSize, not by document size.
 
-import { CELL_CSS_COLOR, CELL_RGB } from "./colors.ts";
-import { CellKind, SpawnDirection, type LevelDocument, getCell, getDirection, indexOf } from "./level-model.ts";
+import { ICON_DETAIL_MIN_PX, renderDetailedCell, renderFlatCell } from "./cell-paint.ts";
+import { CELL_RGB } from "./colors.ts";
+import { CellKind, type LevelDocument, getCell, indexOf, contentBounds } from "./level-model.ts";
 
 export type Viewport = {
   /** Doc-space cell coordinate at the canvas's top-left corner. */
@@ -24,8 +25,6 @@ export type CellBounds = {
 // Below this cell size, per-cell fillRect calls stop paying off (thousands of
 // draw calls for a screen's worth of cells); switch to a pixel-buffer blit.
 const LOW_ZOOM_CELL_PX = 3;
-// Spawn direction arrows only read as a shape above this size.
-const DIRECTION_MARKER_MIN_PX = 10;
 
 export function screenToCell(viewport: Viewport, sx: number, sy: number): { x: number; y: number } {
   return {
@@ -71,6 +70,60 @@ export function panViewport(viewport: Viewport, dx: number, dy: number): Viewpor
   };
 }
 
+export type ViewportOriginBounds = {
+  minOriginX: number;
+  maxOriginX: number;
+  minOriginY: number;
+  maxOriginY: number;
+};
+
+/** Valid origin range for a viewport. When the document is smaller than the
+ * visible area, min origin is negative so the board can be centered instead of
+ * hugging the top-left corner. */
+export function viewportOriginBounds(
+  doc: LevelDocument,
+  cellSize: number,
+  canvasWidth: number,
+  canvasHeight: number,
+): ViewportOriginBounds {
+  const visibleCellsX = canvasWidth / cellSize;
+  const visibleCellsY = canvasHeight / cellSize;
+  return {
+    minOriginX: Math.min(0, doc.width - visibleCellsX),
+    maxOriginX: Math.max(0, doc.width - visibleCellsX),
+    minOriginY: Math.min(0, doc.height - visibleCellsY),
+    maxOriginY: Math.max(0, doc.height - visibleCellsY),
+  };
+}
+
+/** Zoom-to-fit with the document centered in the canvas when it does not fill
+ * the viewport. Uses the tight content bbox when present so padded void
+ * columns/rows in the ascii art do not pull the maze off-center. */
+export function fitViewportToDocument(doc: LevelDocument, canvasWidth: number, canvasHeight: number): Viewport {
+  const bounds = contentBounds(doc);
+  const colStart = bounds?.colStart ?? 0;
+  const colEnd = bounds?.colEnd ?? doc.width;
+  const rowStart = bounds?.rowStart ?? 0;
+  const rowEnd = bounds?.rowEnd ?? doc.height;
+  const contentWidth = colEnd - colStart;
+  const contentHeight = rowEnd - rowStart;
+
+  const minCellSize = Math.min(canvasWidth / contentWidth, canvasHeight / contentHeight, 64);
+  const cellSize = Math.max(1, minCellSize);
+  const visibleCellsX = canvasWidth / cellSize;
+  const visibleCellsY = canvasHeight / cellSize;
+  return clampViewport(
+    {
+      cellSize,
+      originX: colStart + (contentWidth - visibleCellsX) / 2,
+      originY: rowStart + (contentHeight - visibleCellsY) / 2,
+    },
+    doc,
+    canvasWidth,
+    canvasHeight,
+  );
+}
+
 /** Clamps a viewport so it never pans/zooms past the document edges. */
 export function clampViewport(
   viewport: Viewport,
@@ -80,52 +133,12 @@ export function clampViewport(
 ): Viewport {
   const minCellSize = Math.min(canvasWidth / doc.width, canvasHeight / doc.height, 64);
   const cellSize = Math.min(64, Math.max(minCellSize, viewport.cellSize));
-  const maxOriginX = Math.max(0, doc.width - canvasWidth / cellSize);
-  const maxOriginY = Math.max(0, doc.height - canvasHeight / cellSize);
+  const { minOriginX, maxOriginX, minOriginY, maxOriginY } = viewportOriginBounds(doc, cellSize, canvasWidth, canvasHeight);
   return {
     cellSize,
-    originX: Math.min(Math.max(0, viewport.originX), maxOriginX),
-    originY: Math.min(Math.max(0, viewport.originY), maxOriginY),
+    originX: Math.min(Math.max(minOriginX, viewport.originX), maxOriginX),
+    originY: Math.min(Math.max(minOriginY, viewport.originY), maxOriginY),
   };
-}
-
-function directionAngle(direction: SpawnDirection): number {
-  switch (direction) {
-    case SpawnDirection.Up:
-      return -Math.PI / 2;
-    case SpawnDirection.Right:
-      return 0;
-    case SpawnDirection.Down:
-      return Math.PI / 2;
-    case SpawnDirection.Left:
-      return Math.PI;
-    default: {
-      const exhaustive: never = direction;
-      throw new Error(`Unhandled direction: ${String(exhaustive)}`);
-    }
-  }
-}
-
-function drawDirectionMarker(
-  ctx: CanvasRenderingContext2D,
-  cx: number,
-  cy: number,
-  size: number,
-  direction: SpawnDirection,
-): void {
-  const angle = directionAngle(direction);
-  const radius = size * 0.32;
-  ctx.save();
-  ctx.translate(cx, cy);
-  ctx.rotate(angle);
-  ctx.fillStyle = "#111111";
-  ctx.beginPath();
-  ctx.moveTo(radius, 0);
-  ctx.lineTo(-radius * 0.6, -radius * 0.75);
-  ctx.lineTo(-radius * 0.6, radius * 0.75);
-  ctx.closePath();
-  ctx.fill();
-  ctx.restore();
 }
 
 function renderPerCell(
@@ -135,20 +148,22 @@ function renderPerCell(
   bounds: CellBounds,
 ): void {
   const { cellSize } = viewport;
-  const showMarkers = cellSize >= DIRECTION_MARKER_MIN_PX;
+  const detailed = cellSize >= ICON_DETAIL_MIN_PX;
 
   for (let y = bounds.rowStart; y < bounds.rowEnd; y++) {
     for (let x = bounds.colStart; x < bounds.colEnd; x++) {
       const kind = getCell(doc, x, y);
       const { x: sx, y: sy } = cellToScreen(viewport, x, y);
-      ctx.fillStyle = CELL_CSS_COLOR[kind];
       // Round up so adjacent cells never leave a 1px seam from rounding.
-      const w = Math.ceil(sx + cellSize) - Math.floor(sx);
-      const h = Math.ceil(sy + cellSize) - Math.floor(sy);
-      ctx.fillRect(Math.floor(sx), Math.floor(sy), w, h);
+      const left = Math.floor(sx);
+      const top = Math.floor(sy);
+      const w = Math.ceil(sx + cellSize) - left;
+      const h = Math.ceil(sy + cellSize) - top;
 
-      if (showMarkers && (kind === CellKind.Player || kind === CellKind.Ghost)) {
-        drawDirectionMarker(ctx, sx + cellSize / 2, sy + cellSize / 2, cellSize, getDirection(doc, x, y));
+      if (detailed) {
+        renderDetailedCell(ctx, doc, kind, x, y, left, top, w, h, cellSize);
+      } else {
+        renderFlatCell(ctx, kind, left, top, w, h);
       }
     }
   }
@@ -158,6 +173,9 @@ function renderPerCell(
 export function createRenderer(): { render: (ctx: CanvasRenderingContext2D, doc: LevelDocument, viewport: Viewport, canvasWidth: number, canvasHeight: number) => void } {
   let offscreen: OffscreenCanvas | HTMLCanvasElement | null = null;
   let offscreenCtx: CanvasRenderingContext2D | null = null;
+  let pixelBuffer: ImageData | null = null;
+  let pixelBufferCols = 0;
+  let pixelBufferRows = 0;
 
   function getOffscreen(width: number, height: number): CanvasRenderingContext2D {
     if (offscreen === null || offscreen.width !== width || offscreen.height !== height) {
@@ -173,6 +191,15 @@ export function createRenderer(): { render: (ctx: CanvasRenderingContext2D, doc:
     return offscreenCtx;
   }
 
+  function getPixelBuffer(bufferCtx: CanvasRenderingContext2D, cols: number, rows: number): ImageData {
+    if (pixelBuffer === null || pixelBufferCols !== cols || pixelBufferRows !== rows) {
+      pixelBuffer = bufferCtx.createImageData(cols, rows);
+      pixelBufferCols = cols;
+      pixelBufferRows = rows;
+    }
+    return pixelBuffer;
+  }
+
   function renderBuffered(
     ctx: CanvasRenderingContext2D,
     doc: LevelDocument,
@@ -186,7 +213,7 @@ export function createRenderer(): { render: (ctx: CanvasRenderingContext2D, doc:
     }
 
     const bufferCtx = getOffscreen(cols, rows);
-    const image = bufferCtx.createImageData(cols, rows);
+    const image = getPixelBuffer(bufferCtx, cols, rows);
     const pixels = image.data;
 
     for (let y = 0; y < rows; y++) {

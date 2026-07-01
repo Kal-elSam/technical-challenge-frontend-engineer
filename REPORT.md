@@ -4,7 +4,8 @@
 
 `frontend/editor/` — a Vue 3 + TypeScript + Bun level editor for Maze Chase
 levels, backed by the existing FastAPI service. Run with `bun run editor`
-(needs `uv run backend` running too).
+(needs `uv run backend` running too). **Play** opens `bun run game` with the
+saved level id (`?level=...`).
 
 ## Technical decisions
 
@@ -24,10 +25,12 @@ levels, backed by the existing FastAPI service. Run with `bun run editor`
   that round-trips all six tokens and feeds `fromAscii2d` unmodified — the
   engine still owns what "playable" means.
 - **Viewport-bounded canvas rendering.** `renderer.ts` never touches a cell
-  outside the visible area. Above ~3px/cell it draws per-cell rects; below
+  outside the visible area. Above ~3px/cell it draws per-cell icons; below
   that it fills an offscreen `ImageData` buffer sized to the *visible* cell
   count and blits it scaled up, so zooming out to see a full 1000×1000 board
   is one small buffer write instead of a million `fillRect` calls.
+  `fitViewportToDocument` centers the maze (negative origins when the board
+  is smaller than the canvas; `contentBounds` ignores ascii padding void).
 - **Stroke = interpolate + dedupe.** `stroke.ts` Bresenham-interpolates
   between pointer samples so fast drags don't skip cells, and skips writing
   cells already at the target kind/direction — this is both the "dedupe"
@@ -38,55 +41,47 @@ levels, backed by the existing FastAPI service. Run with `bun run editor`
   silently) and `→ error` on network failure (retryable). Every save quotes
   `base_version`; generated/new levels are stored immediately so they have a
   real id/version before the first autosave needs one.
-- **Backend persistence (P1)**: `storage.py` now optionally mirrors the
-  level dict to a JSON file (atomic write via temp-file + rename), loaded on
-  startup. `id`/`version`/`ascii2d` and the conflict contract are unchanged;
-  tests use `LevelStore()` with no path so they never touch disk.
+- **Backend persistence (P1)**: `storage.py` mirrors the level dict to a JSON
+  file (atomic write via temp-file + rename), loaded on startup.
+- **Hardening pass**: save-in-flight queue, `operationId` generation token,
+  `hasPendingWork` drives `beforeunload` including conflict state,
+  confirm-before-discard on level switch/new/generate, reused `ImageData` in
+  the low-zoom renderer path.
+- **Shared arcade visuals** (`frontend/shared/`): palette + canvas shapes
+  used by both editor and game playground so levels look the same in edit and
+  play modes. Editor board uses floor + icon rendering (beveled walls,
+  pellet dots, pac-man wedge, ghost silhouettes).
+- **Editor → game preview (P1)**: Toolbar **Play** flushes pending saves,
+  then opens `http://localhost:3000/?level=<id>`. The game loads
+  `ascii2d` from `GET /level/load` via `frontend/shared/level-api.ts` and
+  falls back to classic if the backend is unreachable.
 
 ## What code was read
 
 `technical-challenge-frontend-engineer.md`, `docs/level-editor-spec.md`,
-all of `frontend/game/engine/` (`board.ts`, `ascii2d.ts`, `coord.ts`,
-`engine.ts`, `player.ts`, `ghost.ts`, `pellet.ts`, `index.ts`),
-`frontend/game/{App.vue,main.ts,serve.ts,index.html,env.d.ts,styles.css}`,
-all of `backend/server/` (`app.py`, `models.py`, `storage.py`) and
-`backend/generator/` (`maze.py`, `ascii2d.py`), plus the root config files
-(`package.json`, `tsconfig.json`, `bunfig.toml`, `pyproject.toml`).
+all of `frontend/game/engine/`, `frontend/game/` shell, all of
+`backend/server/` and `backend/generator/`, plus root config files.
 
 ## What was NOT changed
 
 - `frontend/game/engine/**` — game mechanics, `Board`, `fromAscii2d`, and the
-  wall-only `toAscii2d` are untouched. The editor works around the
-  serialization gap with its own serializer instead of editing shared code.
-- `frontend/game/**` — the game playground is untouched; `bun run game`
-  still behaves exactly as before.
+  wall-only `toAscii2d` are untouched.
 - `backend/generator/**` — the deterministic maze generator is untouched.
 - `backend/server/models.py` — request/response contracts are unchanged.
-- The version/conflict semantics in `backend/server/storage.py`
-  (`VersionConflict`, `LevelNotFound`, monotonic `version`) — persistence
-  was added around them, not into them.
+- Version/conflict semantics in `storage.py` — persistence was added around
+  them, not into them.
+
+**Presentation-only game changes:** `frontend/game/App.vue`, `styles.css`, and
+new `render.ts` reuse the shared palette/shapes for a consistent look. No
+movement, collision, ghost AI, or power-up logic was touched.
 
 ## AI use and limits
 
 Built with Cursor's agent, iterating in small, verifiable steps. Limits I
 held to:
 
-- No changes to game mechanics or the wire format the engine expects —
-  every serializer change was checked against `fromAscii2d`/`toAscii2d`
-  directly, not just against my own code.
-- Every non-trivial claim was verified, not assumed: `bun test` +
-  `uv run pytest` for logic, and live browser testing (paint strokes, 1M-cell
-  zoom/pan, generate, and a real 409 by racing two writes) for the UI. That
-  testing surfaced and fixed three real bugs before they shipped:
-  1. `setPointerCapture` could throw and crash the app on some pointer
-     sources — now guarded.
-  2. Every successful autosave replaced the document object for its
-     id/version, which a naive `watch` used to reinterpret as "reset the
-     viewport" — autosave was resetting the user's pan/zoom mid-edit. Fixed
-     by removing that watch; every real level switch already fits the view
-     explicitly.
-  3. The `directions` array used two different "don't care" defaults
-     (zero-init vs. an explicit `Right`) for non-spawn cells, breaking exact
-     round-trip equality. Normalized to one constant.
-- Did not invent backend endpoints or fields beyond what `app.py`/`models.py`
-  already exposed.
+- No changes to game mechanics or the wire format the engine expects.
+- Every non-trivial claim was verified: `bun test` + `uv run pytest` for
+  logic, browser testing for UI/sync/conflict scenarios.
+- Did not invent backend endpoints beyond what `app.py`/`models.py` exposed.
+- Refused scope creep: no minimap, undo/redo, auth, or deployment.

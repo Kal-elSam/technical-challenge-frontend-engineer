@@ -18,3 +18,4 @@ backend/server/data/
 # Local agent tooling artifacts (not part of the project)
 .atl/
 .cursor/
+graphify-out/

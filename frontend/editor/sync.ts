@@ -7,6 +7,9 @@
 //   clean -> dirty -> saving -> clean
 //   dirty/saving -> conflict   (409: stop autosave, wait for the user)
 //   dirty/saving -> error      (network failure: stays retryable)
+//
+// Only one persist runs at a time. Edits during an in-flight save queue a
+// follow-up persist so two concurrent writes never share the same base_version.
 
 import { shallowRef, triggerRef, type ShallowRef } from "vue";
 
@@ -16,6 +19,11 @@ import { createEmptyDocument, type LevelDocument, parseAscii2d, serializeToAscii
 export type SyncStatus = "loading" | "clean" | "dirty" | "saving" | "conflict" | "error";
 
 const AUTOSAVE_DELAY_MS = 800;
+
+/** True when local edits may differ from the last accepted backend version. */
+export function hasPendingWork(status: SyncStatus): boolean {
+  return status === "dirty" || status === "saving" || status === "error" || status === "conflict";
+}
 
 export type LevelSync = {
   status: ShallowRef<SyncStatus>;
@@ -43,6 +51,10 @@ export function createLevelSync(initial: LevelDocument): LevelSync {
   const errorMessage = shallowRef<string | null>(null);
   const document = shallowRef<LevelDocument>(initial);
   let autosaveTimer: ReturnType<typeof setTimeout> | null = null;
+  let persistInFlight = false;
+  let queuedPersist = false;
+  /** Bumped on load/generate/createBlank so stale in-flight saves never apply. */
+  let operationId = 0;
 
   function clearAutosaveTimer(): void {
     if (autosaveTimer !== null) {
@@ -56,27 +68,86 @@ export function createLevelSync(initial: LevelDocument): LevelSync {
     triggerRef(document);
   }
 
-  async function persist(): Promise<void> {
+  function scheduleAutosave(): void {
     clearAutosaveTimer();
-    if (status.value === "conflict" || status.value === "saving") {
+    if (persistInFlight) {
       return;
     }
+    autosaveTimer = setTimeout(() => void persist(), AUTOSAVE_DELAY_MS);
+  }
+
+  function beginNewOperation(): number {
+    clearAutosaveTimer();
+    persistInFlight = false;
+    queuedPersist = false;
+    return ++operationId;
+  }
+
+  function isCurrentOperation(expectedOpId: number): boolean {
+    return expectedOpId === operationId;
+  }
+
+  async function runPersist(expectedOpId: number): Promise<boolean> {
+    if (!isCurrentOperation(expectedOpId)) {
+      return false;
+    }
     const doc = document.value;
-    status.value = "saving";
     errorMessage.value = null;
     const ascii2d = serializeToAscii2d(doc);
+    const response = doc.id === null ? await createLevel(ascii2d) : await updateLevel(doc.id, ascii2d, doc.version ?? 0);
+    if (!isCurrentOperation(expectedOpId)) {
+      return false;
+    }
+    setDocument({ ...doc, id: response.id, version: response.version });
+    return true;
+  }
+
+  async function persist(): Promise<void> {
+    clearAutosaveTimer();
+    if (status.value === "conflict") {
+      return;
+    }
+    if (persistInFlight) {
+      queuedPersist = true;
+      return;
+    }
+    if (status.value !== "dirty" && status.value !== "error") {
+      return;
+    }
+
+    persistInFlight = true;
     try {
-      const response = doc.id === null ? await createLevel(ascii2d) : await updateLevel(doc.id, ascii2d, doc.version ?? 0);
-      setDocument({ ...doc, id: response.id, version: response.version });
-      status.value = "clean";
-    } catch (error) {
-      if (error instanceof ConflictError) {
-        status.value = "conflict";
-        errorMessage.value = "Someone else saved a newer version. Reload to see it before continuing.";
-        return;
-      }
-      status.value = "error";
-      errorMessage.value = error instanceof Error ? error.message : String(error);
+      do {
+        queuedPersist = false;
+        const saveOpId = operationId;
+        status.value = "saving";
+        try {
+          const applied = await runPersist(saveOpId);
+          if (!applied) {
+            return;
+          }
+        } catch (error) {
+          if (!isCurrentOperation(saveOpId)) {
+            return;
+          }
+          if (error instanceof ConflictError) {
+            status.value = "conflict";
+            errorMessage.value = "Someone else saved a newer version. Reload to see it before continuing.";
+            return;
+          }
+          status.value = "error";
+          errorMessage.value = error instanceof Error ? error.message : String(error);
+          return;
+        }
+        if (!isCurrentOperation(saveOpId)) {
+          return;
+        }
+        if (!queuedPersist) {
+          status.value = "clean";
+        }
+      } while (queuedPersist);
+    } finally {
+      persistInFlight = false;
     }
   }
 
@@ -85,61 +156,102 @@ export function createLevelSync(initial: LevelDocument): LevelSync {
       return;
     }
     status.value = "dirty";
-    clearAutosaveTimer();
-    autosaveTimer = setTimeout(() => void persist(), AUTOSAVE_DELAY_MS);
+    if (persistInFlight) {
+      queuedPersist = true;
+      return;
+    }
+    scheduleAutosave();
+  }
+
+  function isConflict(): boolean {
+    return status.value === "conflict";
   }
 
   async function flush(): Promise<void> {
-    if (status.value !== "dirty" && status.value !== "error") {
+    if (isConflict()) {
       return;
     }
-    await persist();
+    clearAutosaveTimer();
+    if (status.value !== "dirty" && status.value !== "error" && !persistInFlight) {
+      return;
+    }
+    if (status.value !== "loading") {
+      status.value = "dirty";
+    }
+    while (true) {
+      if (isConflict()) {
+        return;
+      }
+      if (!hasPendingWork(status.value) && !persistInFlight && !queuedPersist) {
+        break;
+      }
+      if (!persistInFlight) {
+        await persist();
+      }
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
   }
 
   async function load(id: string): Promise<void> {
-    clearAutosaveTimer();
+    const opId = beginNewOperation();
     status.value = "loading";
     errorMessage.value = null;
     try {
       const response = await loadLevel(id);
+      if (!isCurrentOperation(opId)) {
+        return;
+      }
       setDocument({ ...parseAscii2d(response.ascii2d), id: response.id, version: response.version });
       status.value = "clean";
     } catch (error) {
+      if (!isCurrentOperation(opId)) {
+        return;
+      }
       status.value = "error";
       errorMessage.value = error instanceof Error ? error.message : String(error);
     }
   }
 
   async function generate(seed: number, size: number): Promise<void> {
-    clearAutosaveTimer();
+    const opId = beginNewOperation();
     status.value = "loading";
     errorMessage.value = null;
     try {
       const generated = await generateLevel(seed, size);
-      // Store immediately: a generated level must have a real backend id
-      // before the user can edit it, or the first autosave has nothing to
-      // attach a base_version to.
+      if (!isCurrentOperation(opId)) {
+        return;
+      }
       const created = await createLevel(generated.ascii2d);
+      if (!isCurrentOperation(opId)) {
+        return;
+      }
       setDocument({ ...parseAscii2d(created.ascii2d), id: created.id, version: created.version });
       status.value = "clean";
     } catch (error) {
+      if (!isCurrentOperation(opId)) {
+        return;
+      }
       status.value = "error";
       errorMessage.value = error instanceof Error ? error.message : String(error);
     }
   }
 
   async function createBlank(width: number, height: number): Promise<void> {
-    clearAutosaveTimer();
+    const opId = beginNewOperation();
     status.value = "loading";
     errorMessage.value = null;
     try {
       const ascii2d = serializeToAscii2d(createEmptyDocument(width, height));
-      // Store immediately, same reasoning as `generate`: editing needs a
-      // real id/version to attach the first autosave's base_version to.
       const created = await createLevel(ascii2d);
+      if (!isCurrentOperation(opId)) {
+        return;
+      }
       setDocument({ ...parseAscii2d(created.ascii2d), id: created.id, version: created.version });
       status.value = "clean";
     } catch (error) {
+      if (!isCurrentOperation(opId)) {
+        return;
+      }
       status.value = "error";
       errorMessage.value = error instanceof Error ? error.message : String(error);
     }

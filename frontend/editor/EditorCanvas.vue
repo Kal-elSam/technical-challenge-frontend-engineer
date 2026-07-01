@@ -5,10 +5,18 @@
 // and mutated as a plain object, and only view state (viewport, cursor
 // cell) is Vue-reactive.
 
-import { onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 
 import type { CellKind, LevelDocument, SpawnDirection } from "./level-model.ts";
-import { clampViewport, createRenderer, panViewport, screenToCell, zoomViewport, type Viewport } from "./renderer.ts";
+import {
+  clampViewport,
+  createRenderer,
+  fitViewportToDocument,
+  panViewport,
+  screenToCell,
+  zoomViewport,
+  type Viewport,
+} from "./renderer.ts";
 import { applyStroke, type GridPoint } from "./stroke.ts";
 
 const props = defineProps<{
@@ -26,8 +34,12 @@ const emit = defineEmits<{
 const canvasEl = ref<HTMLCanvasElement | null>(null);
 const containerEl = ref<HTMLDivElement | null>(null);
 const renderer = createRenderer();
+const isPanningState = ref(false);
+const spaceHeldState = ref(false);
 
 const viewport = ref<Viewport>({ originX: 0, originY: 0, cellSize: 16 });
+const zoomPercent = computed(() => Math.round(viewport.value.cellSize * 100));
+const cursorClass = computed(() => (isPanningState.value ? "panning" : spaceHeldState.value ? "pan-ready" : "painting"));
 let canvasWidth = 0;
 let canvasHeight = 0;
 let devicePixelRatio = 1;
@@ -69,9 +81,7 @@ function draw(): void {
 }
 
 function fitToDocument(): void {
-  const doc = props.doc;
-  const cellSize = Math.max(1, Math.min(canvasWidth / doc.width, canvasHeight / doc.height));
-  viewport.value = clampViewport({ originX: 0, originY: 0, cellSize }, doc, canvasWidth, canvasHeight);
+  viewport.value = fitViewportToDocument(props.doc, canvasWidth, canvasHeight);
   draw();
 }
 
@@ -117,6 +127,7 @@ function onPointerDown(event: PointerEvent): void {
   const wantsPan = spaceHeld || event.button === 1;
   if (wantsPan) {
     isPanning = true;
+    isPanningState.value = true;
     panStart = { sx, sy, originX: viewport.value.originX, originY: viewport.value.originY };
     capturePointer(event.pointerId);
     return;
@@ -158,6 +169,7 @@ function endStroke(): void {
     emit("stroke-end");
   }
   isPanning = false;
+  isPanningState.value = false;
   panStart = null;
 }
 
@@ -177,12 +189,14 @@ function onWheel(event: WheelEvent): void {
 function onKeyDown(event: KeyboardEvent): void {
   if (event.code === "Space") {
     spaceHeld = true;
+    spaceHeldState.value = true;
   }
 }
 
 function onKeyUp(event: KeyboardEvent): void {
   if (event.code === "Space") {
     spaceHeld = false;
+    spaceHeldState.value = false;
   }
 }
 
@@ -218,6 +232,7 @@ defineExpose({ fitToDocument });
     <canvas
       ref="canvasEl"
       class="editor-canvas"
+      :class="cursorClass"
       role="img"
       aria-label="Level grid canvas: drag to paint, wheel to pan, ctrl+wheel to zoom"
       @pointerdown="onPointerDown"
@@ -228,21 +243,53 @@ defineExpose({ fitToDocument });
       @wheel="onWheel"
       @contextmenu.prevent
     />
+    <span class="zoom-badge">{{ zoomPercent }}%</span>
   </div>
 </template>
 
 <style scoped>
 .canvas-shell {
   position: relative;
+  flex: 1;
   width: 100%;
-  height: 100%;
+  min-height: 0;
   overflow: hidden;
-  background: #101010;
+  background:
+    radial-gradient(ellipse at center, rgba(255, 255, 255, 0.02), transparent 70%),
+    #0a0a0e;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-strong);
+  box-shadow:
+    var(--shadow-md),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
 .editor-canvas {
   display: block;
   touch-action: none;
   cursor: crosshair;
+}
+
+.editor-canvas.pan-ready {
+  cursor: grab;
+}
+
+.editor-canvas.panning {
+  cursor: grabbing;
+}
+
+.zoom-badge {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  background: rgba(18, 18, 20, 0.85);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+  padding: 3px 9px;
+  border-radius: 999px;
+  pointer-events: none;
+  backdrop-filter: blur(4px);
 }
 </style>

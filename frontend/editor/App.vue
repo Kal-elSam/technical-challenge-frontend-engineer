@@ -9,10 +9,11 @@ import { listLevels } from "./api.ts";
 import EditorCanvas from "./EditorCanvas.vue";
 import { CellKind, SpawnDirection, createEmptyDocument } from "./level-model.ts";
 import StatusBar from "./StatusBar.vue";
-import { createLevelSync } from "./sync.ts";
+import { createLevelSync, hasPendingWork } from "./sync.ts";
 import Toolbar from "./Toolbar.vue";
 import { validateLevel } from "./validation.ts";
 import ValidationPanel from "./ValidationPanel.vue";
+import { playUrlForLevel } from "../shared/playground.ts";
 import type { GridPoint } from "./stroke.ts";
 
 const CLASSIC_LEVEL_ID = "classic";
@@ -24,8 +25,9 @@ const selectedTool = ref<CellKind>(CellKind.Wall);
 const selectedDirection = ref<SpawnDirection>(SpawnDirection.Right);
 const levels = ref<string[]>([]);
 const hoverCell = ref<GridPoint | null>(null);
-const hasUnsavedEdits = ref(false);
 const canvasRef = ref<InstanceType<typeof EditorCanvas> | null>(null);
+
+const hasUnsavedEdits = computed(() => hasPendingWork(sync.status.value));
 
 const validationIssues = computed(() => validateLevel(sync.document.value));
 
@@ -39,45 +41,72 @@ async function refreshLevelList(): Promise<void> {
 }
 
 function onCanvasDirty(): void {
-  hasUnsavedEdits.value = true;
   sync.markDirty();
 }
 
 function onStrokeEnd(): void {
   sync.notifyChanged();
-  void sync.flush().then(() => {
-    hasUnsavedEdits.value = sync.status.value === "dirty" || sync.status.value === "error";
-  });
+  void sync.flush();
+}
+
+function confirmDiscardPending(): boolean {
+  if (!hasUnsavedEdits.value) {
+    return true;
+  }
+  return window.confirm("You have unsaved changes. Discard them and continue?");
 }
 
 async function selectLevel(id: string): Promise<void> {
+  if (!confirmDiscardPending()) {
+    return;
+  }
   await sync.load(id);
-  hasUnsavedEdits.value = false;
   canvasRef.value?.fitToDocument();
 }
 
 async function createNewLevel(): Promise<void> {
+  if (!confirmDiscardPending()) {
+    return;
+  }
   await sync.createBlank(NEW_LEVEL_WIDTH, NEW_LEVEL_HEIGHT);
-  hasUnsavedEdits.value = false;
   await refreshLevelList();
   canvasRef.value?.fitToDocument();
 }
 
 async function onGenerate(seed: number, size: number): Promise<void> {
+  if (!confirmDiscardPending()) {
+    return;
+  }
   await sync.generate(seed, size);
-  hasUnsavedEdits.value = false;
   await refreshLevelList();
   canvasRef.value?.fitToDocument();
 }
 
 async function reloadAuthoritative(): Promise<void> {
   await sync.reloadAuthoritative();
-  hasUnsavedEdits.value = false;
   canvasRef.value?.fitToDocument();
 }
 
 function retrySave(): void {
   void sync.flush();
+}
+
+async function playLevel(): Promise<void> {
+  if (hasUnsavedEdits.value) {
+    await sync.flush();
+    if (hasPendingWork(sync.status.value)) {
+      window.alert("Save or resolve conflicts before playing this level.");
+      return;
+    }
+  }
+
+  const id = sync.document.value.id;
+  if (id === null) {
+    window.alert("This level has no backend id yet.");
+    return;
+  }
+
+  window.open(playUrlForLevel(id), "_blank", "noopener,noreferrer");
 }
 
 const TOOL_SHORTCUTS: Record<string, CellKind> = {
@@ -141,44 +170,55 @@ onBeforeUnmount(() => {
 
 <template>
   <main class="editor">
-    <h1 class="title">Maze Chase — Level Editor</h1>
+    <header class="editor-header">
+      <h1 class="title">
+        <span class="logo">▪</span>
+        Maze Chase
+        <span class="title-sub">Level Editor</span>
+      </h1>
 
-    <Toolbar
-      v-model:tool="selectedTool"
-      v-model:direction="selectedDirection"
-      :levels="levels"
-      :current-level-id="sync.document.value.id"
-      @select-level="selectLevel"
-      @new-level="createNewLevel"
-      @generate="onGenerate"
-      @fit-view="canvasRef?.fitToDocument()"
-    />
-
-    <StatusBar
-      :level-id="sync.document.value.id"
-      :version="sync.document.value.version"
-      :width="sync.document.value.width"
-      :height="sync.document.value.height"
-      :status="sync.status.value"
-      :error-message="sync.errorMessage.value"
-      :hover-cell="hoverCell"
-      @reload-authoritative="reloadAuthoritative"
-      @retry="retrySave"
-    />
-
-    <ValidationPanel :issues="validationIssues" />
-
-    <div class="canvas-area">
-      <EditorCanvas
-        ref="canvasRef"
-        :doc="sync.document.value"
-        :tool="selectedTool"
-        :direction="selectedDirection"
-        @dirty="onCanvasDirty"
-        @stroke-end="onStrokeEnd"
-        @hover-cell="(cell) => (hoverCell = cell)"
+      <Toolbar
+        v-model:tool="selectedTool"
+        v-model:direction="selectedDirection"
+        :levels="levels"
+        :current-level-id="sync.document.value.id"
+        @select-level="selectLevel"
+        @new-level="createNewLevel"
+        @generate="onGenerate"
+        @fit-view="canvasRef?.fitToDocument()"
+        @play-level="playLevel"
       />
-    </div>
+
+      <StatusBar
+        :level-id="sync.document.value.id"
+        :version="sync.document.value.version"
+        :width="sync.document.value.width"
+        :height="sync.document.value.height"
+        :status="sync.status.value"
+        :error-message="sync.errorMessage.value"
+        :hover-cell="hoverCell"
+        @reload-authoritative="reloadAuthoritative"
+        @retry="retrySave"
+      />
+    </header>
+
+    <section class="workspace">
+      <div class="stage">
+        <EditorCanvas
+          ref="canvasRef"
+          :doc="sync.document.value"
+          :tool="selectedTool"
+          :direction="selectedDirection"
+          @dirty="onCanvasDirty"
+          @stroke-end="onStrokeEnd"
+          @hover-cell="(cell) => (hoverCell = cell)"
+        />
+
+        <ValidationPanel v-if="validationIssues.length > 0" class="stage-validation" :issues="validationIssues" />
+      </div>
+
+      <p class="hint">Drag to paint · wheel to pan · ctrl/⌘+wheel to zoom · space+drag to pan · 1–6 tools · arrows for direction</p>
+    </section>
   </main>
 </template>
 
@@ -187,18 +227,71 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   height: 100vh;
+  overflow: hidden;
+}
+
+.editor-header {
+  flex-shrink: 0;
+  background: var(--surface-1);
+  border-bottom: 1px solid var(--border-subtle);
 }
 
 .title {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 8px;
   margin: 0;
-  padding: 10px 16px;
-  font-size: 1rem;
-  background: #161616;
-  border-bottom: 1px solid #2a2a2a;
+  padding: 14px 24px 10px;
+  font-size: 0.95rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
 }
 
-.canvas-area {
+.logo {
+  color: var(--accent);
+  font-size: 0.7rem;
+}
+
+.title-sub {
+  font-weight: 400;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.workspace {
   flex: 1;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 16px 24px 20px;
+  background:
+    radial-gradient(900px 500px at 50% 40%, rgba(76, 175, 125, 0.04), transparent),
+    var(--surface-0);
+}
+
+.stage {
+  position: relative;
+  flex: 1;
+  width: min(100%, 1280px);
+  min-height: 0;
+  display: flex;
+}
+
+.stage-validation {
+  position: absolute;
+  left: 16px;
+  bottom: 16px;
+  z-index: 2;
+  max-width: min(420px, calc(100% - 32px));
+}
+
+.hint {
+  margin: 0;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  text-align: center;
 }
 </style>

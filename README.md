@@ -10,8 +10,10 @@ for the editor's design notes.
 bun install && uv sync
 uv run backend      # http://localhost:8000
 bun run editor      # http://localhost:3001 — the level editor
-bun run game        # http://localhost:3000 — play a level
+bun run game        # http://localhost:3000 — play a level (?level=id)
 ```
+
+In the editor, use **Play** to open the current saved level in the game tab.
 
 ## Tests
 

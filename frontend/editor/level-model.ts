@@ -214,3 +214,40 @@ export function cloneDocument(doc: LevelDocument): LevelDocument {
     directions: doc.directions.slice(),
   };
 }
+
+export type ContentBounds = {
+  colStart: number;
+  colEnd: number;
+  rowStart: number;
+  rowEnd: number;
+};
+
+/** Tight bbox around every non-empty cell. Classic levels often pad the
+ * ascii art with leading void columns — fitting the full document rectangle
+ * leaves the visible maze hugging one side even when the viewport is centered. */
+export function contentBounds(doc: LevelDocument): ContentBounds | null {
+  let colStart = doc.width;
+  let colEnd = 0;
+  let rowStart = doc.height;
+  let rowEnd = 0;
+  let found = false;
+
+  for (let y = 0; y < doc.height; y++) {
+    for (let x = 0; x < doc.width; x++) {
+      if (getCell(doc, x, y) === CellKind.Empty) {
+        continue;
+      }
+      found = true;
+      colStart = Math.min(colStart, x);
+      colEnd = Math.max(colEnd, x + 1);
+      rowStart = Math.min(rowStart, y);
+      rowEnd = Math.max(rowEnd, y + 1);
+    }
+  }
+
+  if (!found) {
+    return null;
+  }
+
+  return { colStart, colEnd, rowStart, rowEnd };
+}
