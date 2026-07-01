@@ -43,6 +43,9 @@ saved level id (`?level=...`).
   real id/version before the first autosave needs one.
 - **Backend persistence (P1)**: `storage.py` mirrors the level dict to a JSON
   file (atomic write via temp-file + rename), loaded on startup.
+- **Delete custom levels**: `POST /level/delete` + `LevelStore.delete()` let
+  the editor remove corrupt or unwanted custom levels (`classic` is protected).
+  The error banner exposes delete when load/save fails on a broken board.
 - **Hardening pass**: save-in-flight queue, `operationId` generation token,
   `hasPendingWork` drives `beforeunload` including conflict state,
   confirm-before-discard on level switch/new/generate, reused `ImageData` in
@@ -60,6 +63,16 @@ saved level id (`?level=...`).
   labels ("Classic", "Generated 41×41 · seed 1", numbered "Custom maze"
   fallbacks) in sessionStorage; the wire format and API stay unchanged.
 
+## Playground UX (not engine)
+
+The game shell (`frontend/game/App.vue`, `settings.ts`) adds **playground-only**
+controls — no changes to movement, collision, ghost AI, or power-ups:
+
+- **Fixed simulation timestep** decoupled from monitor FPS (was one
+  `engine.tick()` per animation frame, so 144 Hz felt ~2.4× too fast).
+- **Speed selector** (slow / normal / fast presets, sessionStorage).
+- **Restart** button and `R` key recreate the engine from the loaded level.
+
 ## What code was read
 
 `technical-challenge-frontend-engineer.md`, `docs/level-editor-spec.md`,
@@ -71,13 +84,14 @@ all of `frontend/game/engine/`, `frontend/game/` shell, all of
 - `frontend/game/engine/**` — game mechanics, `Board`, `fromAscii2d`, and the
   wall-only `toAscii2d` are untouched.
 - `backend/generator/**` — the deterministic maze generator is untouched.
-- `backend/server/models.py` — request/response contracts are unchanged.
-- Version/conflict semantics in `storage.py` — persistence was added around
-  them, not into them.
+- Core store/generate contracts — `StoreRequest`, version/conflict semantics,
+  and `GenerateRequest` are unchanged. Only additive API: `DeleteRequest` +
+  `POST /level/delete` (plus `DELETE` query alias for tests).
+- Version/conflict semantics in `storage.py` — persistence and delete were
+  added around them, not into them.
 
-**Presentation-only game changes:** `frontend/game/App.vue`, `styles.css`, and
-new `render.ts` reuse the shared palette/shapes for a consistent look. No
-movement, collision, ghost AI, or power-up logic was touched.
+**Presentation-only game changes:** `frontend/game/App.vue`, `styles.css`,
+`render.ts`, and `settings.ts` — visuals and playground controls only.
 
 ## AI use and limits
 
@@ -87,5 +101,14 @@ held to:
 - No changes to game mechanics or the wire format the engine expects.
 - Every non-trivial claim was verified: `bun test` + `uv run pytest` for
   logic, browser testing for UI/sync/conflict scenarios.
-- Did not invent backend endpoints beyond what `app.py`/`models.py` exposed.
+- Backend changes stayed minimal and additive (persistence, delete); no auth,
+  no new stack.
 - Refused scope creep: no minimap, undo/redo, auth, or deployment.
+
+## Open question
+
+How would this editor evolve for **collaborative editing** while keeping the
+backend as authority — an operation log with server-side patches, or a CRDT
+over cell edits? The current `version + full ascii2d` contract is simple for
+one editor tab but would force explicit conflict UX (or a new wire format) once
+two users paint the same level concurrently.

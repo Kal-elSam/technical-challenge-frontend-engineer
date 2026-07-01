@@ -24,11 +24,11 @@ Build a Vue 3 level editor that can load, edit, validate, generate, and save Pac
 | Game source of truth | `frontend/game/engine/` parses `ascii2d` and runs mechanics. |
 | Wire format | Each cell is a 2-character token: wall `##`, empty `  `, pellet `. `, power pellet `O `, player `P<dir>`, ghost `G<dir>`. |
 | Existing serializer gap | `frontend/game/engine/ascii2d.ts` currently serializes walls only; the editor needs full token serialization. |
-| Backend API | `GET /level/load`, `POST /level/store`, `POST /level/generate`, `GET /levels`. |
+| Backend API | `GET /level/load`, `POST /level/store`, `POST /level/generate`, `POST /level/delete`, `GET /levels`. |
 | Conflict model | Updates require `base_version`; stale writes return HTTP `409`. This is the right authority contract. |
 | Persistence gap | `backend/server/storage.py` is in-memory and has a TODO for durable persistence. |
-| Editor scaffold | `frontend/editor/` is empty except `.gitkeep`. |
-| Repository state | The working folder is not currently initialized as a git repository. |
+| Editor scaffold | `frontend/editor/` — full editor implementation. |
+| Repository state | Git repository initialized; see `README.md` for run instructions. |
 
 ## Product spec
 
@@ -165,29 +165,29 @@ Tradeoff:
 
 ### P0 — required
 
-- [ ] Add editor Bun entrypoints and `package.json` script.
-- [ ] Build an editor grid model based on compact arrays.
-- [ ] Implement `ascii2d` parse/serialize round-trip for all token kinds.
-- [ ] Implement canvas viewport rendering with pan/zoom.
-- [ ] Implement paint tools and direction-aware spawns.
-- [ ] Implement API client for load/list/store/generate.
-- [ ] Implement versioned autosave and conflict handling.
-- [ ] Add validation/status UI.
-- [ ] Add `REPORT.md`.
-- [ ] Initialize git before submission.
+- [x] Add editor Bun entrypoints and `package.json` script.
+- [x] Build an editor grid model based on compact arrays.
+- [x] Implement `ascii2d` parse/serialize round-trip for all token kinds.
+- [x] Implement canvas viewport rendering with pan/zoom.
+- [x] Implement paint tools and direction-aware spawns.
+- [x] Implement API client for load/list/store/generate.
+- [x] Implement versioned autosave and conflict handling.
+- [x] Add validation/status UI.
+- [x] Add `REPORT.md`.
+- [x] Initialize git before submission.
 
 ### P1 — strong signal
 
-- [ ] Add backend file persistence while preserving the version/conflict API.
-- [ ] Add focused tests for serialization and backend conflict behavior.
-- [ ] Add a preview/open-in-game path if it can be done without changing mechanics.
+- [x] Add backend file persistence while preserving the version/conflict API.
+- [x] Add focused tests for serialization and backend conflict behavior.
+- [x] Add a preview/open-in-game path if it can be done without changing mechanics.
 
-### P2 — only if time remains
+### P2 — only if time remains (omitted)
 
-- [ ] Minimap.
-- [ ] Undo/redo.
-- [ ] Brush size.
-- [ ] Rectangle/fill tools.
+- [ ] Minimap — omitted; viewport pan/zoom covers large boards.
+- [ ] Undo/redo — omitted; backend authority + conflict UX was higher priority.
+- [ ] Brush size — omitted.
+- [ ] Rectangle/fill tools — omitted.
 
 ## Out of scope
 
