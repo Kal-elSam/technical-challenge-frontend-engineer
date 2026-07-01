@@ -7,6 +7,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 
 import { listLevels } from "./api.ts";
 import EditorCanvas from "./EditorCanvas.vue";
+import { buildLevelOptions, labelForLevelId, loadLevelLabels, saveLevelLabel } from "./level-labels.ts";
 import { CellKind, SpawnDirection, createEmptyDocument } from "./level-model.ts";
 import StatusBar from "./StatusBar.vue";
 import { createLevelSync, hasPendingWork } from "./sync.ts";
@@ -24,6 +25,15 @@ const sync = createLevelSync(createEmptyDocument(NEW_LEVEL_WIDTH, NEW_LEVEL_HEIG
 const selectedTool = ref<CellKind>(CellKind.Wall);
 const selectedDirection = ref<SpawnDirection>(SpawnDirection.Right);
 const levels = ref<string[]>([]);
+const levelLabels = ref(loadLevelLabels());
+const levelOptions = computed(() => buildLevelOptions(levels.value, levelLabels.value));
+const currentLevelLabel = computed(() => {
+  const id = sync.document.value.id;
+  if (id === null) {
+    return "Unsaved draft";
+  }
+  return labelForLevelId(id, levelLabels.value);
+});
 const hoverCell = ref<GridPoint | null>(null);
 const canvasRef = ref<InstanceType<typeof EditorCanvas> | null>(null);
 
@@ -69,6 +79,11 @@ async function createNewLevel(): Promise<void> {
     return;
   }
   await sync.createBlank(NEW_LEVEL_WIDTH, NEW_LEVEL_HEIGHT);
+  const id = sync.document.value.id;
+  if (id !== null) {
+    saveLevelLabel(id, `Blank ${NEW_LEVEL_WIDTH}×${NEW_LEVEL_HEIGHT}`);
+    levelLabels.value = loadLevelLabels();
+  }
   await refreshLevelList();
   canvasRef.value?.fitToDocument();
 }
@@ -78,6 +93,11 @@ async function onGenerate(seed: number, size: number): Promise<void> {
     return;
   }
   await sync.generate(seed, size);
+  const id = sync.document.value.id;
+  if (id !== null) {
+    saveLevelLabel(id, `Generated ${size}×${size} · seed ${seed}`);
+    levelLabels.value = loadLevelLabels();
+  }
   await refreshLevelList();
   canvasRef.value?.fitToDocument();
 }
@@ -155,6 +175,7 @@ function onBeforeUnload(event: BeforeUnloadEvent): void {
 }
 
 onMounted(() => {
+  levelLabels.value = loadLevelLabels();
   void sync.load(CLASSIC_LEVEL_ID).then(() => canvasRef.value?.fitToDocument());
   void refreshLevelList();
   window.addEventListener("keydown", onKeyDown);
@@ -180,7 +201,7 @@ onBeforeUnmount(() => {
       <Toolbar
         v-model:tool="selectedTool"
         v-model:direction="selectedDirection"
-        :levels="levels"
+        :level-options="levelOptions"
         :current-level-id="sync.document.value.id"
         @select-level="selectLevel"
         @new-level="createNewLevel"
@@ -191,6 +212,7 @@ onBeforeUnmount(() => {
 
       <StatusBar
         :level-id="sync.document.value.id"
+        :level-label="currentLevelLabel"
         :version="sync.document.value.version"
         :width="sync.document.value.width"
         :height="sync.document.value.height"

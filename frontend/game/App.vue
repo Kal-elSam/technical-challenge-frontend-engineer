@@ -2,10 +2,9 @@
 import { computed, onMounted, onUnmounted, ref } from "vue";
 
 import { loadLevelPayload } from "./api.ts";
+import { CLASSIC_LEVEL_ID, labelForLevelId, loadLevelLabels } from "../editor/level-labels.ts";
 import { CLASSIC, Direction, Engine, div, fromNum, type Ghost, type Player, type Pellet, type PowerPellet } from "./engine/index.ts";
 import { renderGame } from "./render.ts";
-
-const CLASSIC_LEVEL_ID = "classic";
 
 const BLOCK_SIZE = 16;
 const BOARD_PADDING = 12;
@@ -19,6 +18,7 @@ const levelWidth = ref(0);
 const levelHeight = ref(0);
 const fps = ref(0);
 const levelId = ref(CLASSIC_LEVEL_ID);
+const levelLabel = computed(() => labelForLevelId(levelId.value, loadLevelLabels()));
 const loadNotice = ref<string | null>(null);
 const heldDirection = ref<Direction | null>(null);
 
@@ -165,7 +165,7 @@ onUnmounted(() => {
 
     <section class="stage">
       <div class="hud">
-        <span class="chip" :title="levelId">{{ levelId }}</span>
+        <span class="chip" :title="levelId">{{ levelLabel }}</span>
         <span class="chip">{{ levelWidth }}×{{ levelHeight }}</span>
         <span class="chip">{{ fps }} FPS</span>
         <span class="chip">players {{ players.length }}</span>

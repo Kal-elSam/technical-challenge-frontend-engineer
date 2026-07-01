@@ -55,6 +55,10 @@ saved level id (`?level=...`).
   then opens `http://localhost:3000/?level=<id>`. The game loads
   `ascii2d` from `GET /level/load` via `frontend/shared/level-api.ts` and
   falls back to classic if the backend is unreachable.
+- **Friendly level names in the UI**: the backend only stores opaque ids
+  (uuid hex for generated levels). `level-labels.ts` maps ids to readable
+  labels ("Classic", "Generated 41×41 · seed 1", numbered "Custom maze"
+  fallbacks) in sessionStorage; the wire format and API stay unchanged.
 
 ## What code was read
 

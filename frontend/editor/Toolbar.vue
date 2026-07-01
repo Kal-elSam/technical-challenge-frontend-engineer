@@ -3,12 +3,13 @@ import { ref } from "vue";
 
 import { CELL_CSS_COLOR } from "./colors.ts";
 import { CellKind, SpawnDirection } from "./level-model.ts";
+import type { LevelOption } from "./level-labels.ts";
 
 const tool = defineModel<CellKind>("tool", { required: true });
 const direction = defineModel<SpawnDirection>("direction", { required: true });
 
 defineProps<{
-  levels: string[];
+  levelOptions: LevelOption[];
   currentLevelId: string | null;
 }>();
 
@@ -101,7 +102,9 @@ function onGenerate(): void {
           :title="currentLevelId ?? undefined"
           @change="emit('select-level', ($event.target as HTMLSelectElement).value)"
         >
-          <option v-for="id in levels" :key="id" :value="id" :title="id">{{ id }}</option>
+          <option v-for="entry in levelOptions" :key="entry.id" :value="entry.id" :title="entry.id">
+            {{ entry.label }}
+          </option>
         </select>
         <button type="button" class="ghost-button" @click="emit('new-level')">New</button>
         <button type="button" class="ghost-button" @click="emit('fit-view')">Fit view</button>
@@ -299,9 +302,8 @@ function onGenerate(): void {
   border-radius: var(--radius-sm);
   padding: 7px 8px;
   cursor: pointer;
-  /* Generated level ids are long hex strings; cap width so one doesn't blow
-     out the whole toolbar's flex layout. */
-  max-width: 130px;
+  /* Long hex ids are hidden behind friendly labels; allow a bit more room. */
+  max-width: 200px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

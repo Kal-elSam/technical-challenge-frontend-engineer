@@ -5,6 +5,7 @@ import type { SyncStatus } from "./sync.ts";
 
 const props = defineProps<{
   levelId: string | null;
+  levelLabel: string;
   version: number | null;
   width: number;
   height: number;
@@ -35,9 +36,9 @@ const isBusy = computed(() => props.status === "loading" || props.status === "sa
 
 <template>
   <div class="status-bar">
-    <span class="chip" title="Level id">
+    <span class="chip" :title="levelId ?? 'No backend id yet'">
       <span class="chip-icon">◇</span>
-      {{ levelId ?? "unsaved" }}
+      {{ levelLabel }}
     </span>
     <span class="chip" title="Version">v{{ version ?? "–" }}</span>
     <span class="chip" title="Grid dimensions">{{ width }}×{{ height }}</span>
