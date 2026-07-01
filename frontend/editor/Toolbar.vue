@@ -11,6 +11,7 @@ const direction = defineModel<SpawnDirection>("direction", { required: true });
 defineProps<{
   levelOptions: LevelOption[];
   currentLevelId: string | null;
+  canDeleteLevel: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -19,6 +20,7 @@ const emit = defineEmits<{
   generate: [seed: number, size: number];
   "fit-view": [];
   "play-level": [];
+  "delete-level": [];
 }>();
 
 // Swatches reuse the renderer's own palette (colors.ts) so the tool a user
@@ -107,6 +109,15 @@ function onGenerate(): void {
           </option>
         </select>
         <button type="button" class="ghost-button" @click="emit('new-level')">New</button>
+        <button
+          type="button"
+          class="danger-button"
+          title="Remove this level from the server (Classic cannot be deleted)"
+          :disabled="!canDeleteLevel"
+          @click="emit('delete-level')"
+        >
+          Delete
+        </button>
         <button type="button" class="ghost-button" @click="emit('fit-view')">Fit view</button>
         <button
           type="button"
@@ -328,7 +339,8 @@ function onGenerate(): void {
 
 .ghost-button,
 .primary-button,
-.play-button {
+.play-button,
+.danger-button {
   border-radius: var(--radius-sm);
   padding: 7px 12px;
   font-size: 0.83rem;
@@ -375,9 +387,26 @@ function onGenerate(): void {
   cursor: not-allowed;
 }
 
+.danger-button {
+  background: rgba(224, 96, 96, 0.12);
+  border: 1px solid rgba(224, 96, 96, 0.45);
+  color: #f0a0a0;
+}
+
+.danger-button:hover:not(:disabled) {
+  background: rgba(224, 96, 96, 0.2);
+  border-color: #e06060;
+}
+
+.danger-button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .ghost-button:active,
 .primary-button:active,
-.play-button:active:not(:disabled) {
+.play-button:active:not(:disabled),
+.danger-button:active:not(:disabled) {
   transform: translateY(1px);
 }
 </style>

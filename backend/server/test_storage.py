@@ -56,3 +56,16 @@ def test_version_conflict_contract_holds_with_persistence_enabled(tmp_path: Path
 
     with pytest.raises(LevelNotFound):
         store.get("nonexistent")
+
+
+def test_delete_removes_level_and_persists(tmp_path: Path) -> None:
+    data_path = tmp_path / "levels.json"
+    store = LevelStore(data_path=data_path)
+    created = store.create("\n##\n")
+    store.delete(created.id)
+
+    with pytest.raises(LevelNotFound):
+        store.get(created.id)
+
+    restarted = LevelStore(data_path=data_path)
+    assert created.id not in restarted.ids()

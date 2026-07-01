@@ -28,3 +28,7 @@ class GenerateResponse(BaseModel):
     seed: int
     size: int
     ascii2d: str
+
+
+class DeleteRequest(BaseModel):
+    id: str

@@ -7,7 +7,14 @@ import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 
 import { listLevels } from "./api.ts";
 import EditorCanvas from "./EditorCanvas.vue";
-import { buildLevelOptions, labelForLevelId, loadLevelLabels, saveLevelLabel } from "./level-labels.ts";
+import {
+  buildLevelOptions,
+  CLASSIC_LEVEL_ID,
+  forgetLevelLabel,
+  labelForLevelId,
+  loadLevelLabels,
+  saveLevelLabel,
+} from "./level-labels.ts";
 import { CellKind, SpawnDirection, createEmptyDocument } from "./level-model.ts";
 import StatusBar from "./StatusBar.vue";
 import { createLevelSync, hasPendingWork } from "./sync.ts";
@@ -17,7 +24,6 @@ import ValidationPanel from "./ValidationPanel.vue";
 import { playUrlForLevel } from "../shared/playground.ts";
 import type { GridPoint } from "./stroke.ts";
 
-const CLASSIC_LEVEL_ID = "classic";
 const NEW_LEVEL_WIDTH = 30;
 const NEW_LEVEL_HEIGHT = 20;
 
@@ -36,8 +42,18 @@ const currentLevelLabel = computed(() => {
 });
 const hoverCell = ref<GridPoint | null>(null);
 const canvasRef = ref<InstanceType<typeof EditorCanvas> | null>(null);
+/** When a level fails to load, keep its id so the user can still delete it. */
+const pendingLevelId = ref<string | null>(null);
 
 const hasUnsavedEdits = computed(() => hasPendingWork(sync.status.value));
+
+const deletableLevelId = computed(() => {
+  const id = pendingLevelId.value ?? sync.document.value.id;
+  if (id === null || id === CLASSIC_LEVEL_ID) {
+    return null;
+  }
+  return id;
+});
 
 const validationIssues = computed(() => validateLevel(sync.document.value));
 
@@ -70,14 +86,19 @@ async function selectLevel(id: string): Promise<void> {
   if (!confirmDiscardPending()) {
     return;
   }
+  pendingLevelId.value = id;
   await sync.load(id);
-  canvasRef.value?.fitToDocument();
+  if (sync.status.value !== "error") {
+    pendingLevelId.value = null;
+    canvasRef.value?.fitToDocument();
+  }
 }
 
 async function createNewLevel(): Promise<void> {
   if (!confirmDiscardPending()) {
     return;
   }
+  pendingLevelId.value = null;
   await sync.createBlank(NEW_LEVEL_WIDTH, NEW_LEVEL_HEIGHT);
   const id = sync.document.value.id;
   if (id !== null) {
@@ -92,6 +113,7 @@ async function onGenerate(seed: number, size: number): Promise<void> {
   if (!confirmDiscardPending()) {
     return;
   }
+  pendingLevelId.value = null;
   await sync.generate(seed, size);
   const id = sync.document.value.id;
   if (id !== null) {
@@ -104,6 +126,40 @@ async function onGenerate(seed: number, size: number): Promise<void> {
 
 async function reloadAuthoritative(): Promise<void> {
   await sync.reloadAuthoritative();
+  if (sync.status.value !== "error") {
+    pendingLevelId.value = null;
+    canvasRef.value?.fitToDocument();
+  }
+}
+
+async function deleteLevel(): Promise<void> {
+  const id = deletableLevelId.value;
+  if (id === null) {
+    return;
+  }
+
+  const label = labelForLevelId(id, levelLabels.value);
+  const openLabel =
+    sync.document.value.id !== null && sync.document.value.id !== id
+      ? labelForLevelId(sync.document.value.id, levelLabels.value)
+      : null;
+  const prompt =
+    openLabel === null
+      ? `Delete "${label}" permanently? This cannot be undone.`
+      : `Delete "${label}" permanently? (You are currently editing "${openLabel}".)`;
+  if (!window.confirm(prompt)) {
+    return;
+  }
+
+  await sync.removeLevel(id);
+  if (sync.status.value === "error") {
+    return;
+  }
+
+  forgetLevelLabel(id);
+  levelLabels.value = loadLevelLabels();
+  pendingLevelId.value = null;
+  await refreshLevelList();
   canvasRef.value?.fitToDocument();
 }
 
@@ -203,11 +259,13 @@ onBeforeUnmount(() => {
         v-model:direction="selectedDirection"
         :level-options="levelOptions"
         :current-level-id="sync.document.value.id"
+        :can-delete-level="deletableLevelId !== null"
         @select-level="selectLevel"
         @new-level="createNewLevel"
         @generate="onGenerate"
         @fit-view="canvasRef?.fitToDocument()"
         @play-level="playLevel"
+        @delete-level="deleteLevel"
       />
 
       <StatusBar
@@ -219,8 +277,10 @@ onBeforeUnmount(() => {
         :status="sync.status.value"
         :error-message="sync.errorMessage.value"
         :hover-cell="hoverCell"
+        :can-delete-level="deletableLevelId !== null"
         @reload-authoritative="reloadAuthoritative"
         @retry="retrySave"
+        @delete-level="deleteLevel"
       />
     </header>
 

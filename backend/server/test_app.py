@@ -101,3 +101,30 @@ def test_generate_does_not_persist_a_level() -> None:
 def test_classic_level_is_seeded_and_listed() -> None:
     response = client.get("/levels")
     assert "classic" in response.json()
+
+
+def test_delete_custom_level_removes_it_from_storage() -> None:
+    created = client.post("/level/store", json={"ascii2d": SAMPLE_ASCII2D}).json()
+    response = client.post("/level/delete", json={"id": created["id"]})
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+    assert client.get("/level/load", params={"id": created["id"]}).status_code == 404
+    assert created["id"] not in client.get("/levels").json()
+
+
+def test_delete_custom_level_via_query_delete() -> None:
+    created = client.post("/level/store", json={"ascii2d": SAMPLE_ASCII2D}).json()
+    response = client.delete("/level/delete", params={"id": created["id"]})
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+
+
+def test_delete_missing_level_is_404() -> None:
+    response = client.post("/level/delete", json={"id": "does-not-exist"})
+    assert response.status_code == 404
+
+
+def test_delete_classic_level_is_forbidden() -> None:
+    response = client.post("/level/delete", json={"id": "classic"})
+    assert response.status_code == 403
+    assert client.get("/level/load", params={"id": "classic"}).status_code == 200

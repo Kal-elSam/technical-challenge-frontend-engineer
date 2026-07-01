@@ -36,6 +36,16 @@ export class NotFoundError extends Error {
   }
 }
 
+export class ForbiddenError extends Error {
+  constructor(
+    readonly levelId: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = "ForbiddenError";
+  }
+}
+
 async function parseErrorDetail(response: Response): Promise<string> {
   try {
     const body = (await response.json()) as { detail?: string };
@@ -104,4 +114,27 @@ export async function generateLevel(seed: number, size: number): Promise<Generat
     throw new Error(`Failed to generate level: ${await parseErrorDetail(response)}`);
   }
   return (await response.json()) as GenerateResponse;
+}
+
+export async function deleteLevel(id: string): Promise<void> {
+  const response = await fetch(`${BASE_URL}/level/delete`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id }),
+  });
+  const detail = await parseErrorDetail(response);
+  if (response.status === 403) {
+    throw new ForbiddenError(id, detail);
+  }
+  if (response.status === 404) {
+    // FastAPI's generic route 404 is just "Not Found" — the running backend
+    // predates the delete endpoint and must be restarted.
+    if (detail === "Not Found") {
+      throw new Error("Delete is unavailable — restart the backend (`uv run backend`).");
+    }
+    throw new NotFoundError(id, detail);
+  }
+  if (!response.ok) {
+    throw new Error(`Failed to delete level ${id}: ${detail}`);
+  }
 }

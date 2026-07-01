@@ -13,8 +13,9 @@
 
 import { shallowRef, triggerRef, type ShallowRef } from "vue";
 
-import { ConflictError, createLevel, generateLevel, loadLevel, updateLevel } from "./api.ts";
+import { ConflictError, createLevel, deleteLevel, generateLevel, loadLevel, NotFoundError, updateLevel } from "./api.ts";
 import { createEmptyDocument, type LevelDocument, parseAscii2d, serializeToAscii2d } from "./level-model.ts";
+import { CLASSIC_LEVEL_ID } from "./level-labels.ts";
 
 export type SyncStatus = "loading" | "clean" | "dirty" | "saving" | "conflict" | "error";
 
@@ -43,6 +44,8 @@ export type LevelSync = {
   flush: () => Promise<void>;
   /** Discards local edits and re-loads the backend's current version. */
   reloadAuthoritative: () => Promise<void>;
+  /** Removes a level from the backend; switches to classic when deleting the open level. */
+  removeLevel: (id: string) => Promise<void>;
   dispose: () => void;
 };
 
@@ -265,6 +268,40 @@ export function createLevelSync(initial: LevelDocument): LevelSync {
     await load(id);
   }
 
+  async function removeLevel(id: string): Promise<void> {
+    const opId = beginNewOperation();
+    status.value = "loading";
+    errorMessage.value = null;
+    try {
+      try {
+        await deleteLevel(id);
+      } catch (error) {
+        // Level already removed server-side — treat as success so the editor
+        // can recover from stale lists or a half-failed prior delete.
+        if (!(error instanceof NotFoundError)) {
+          throw error;
+        }
+      }
+      if (!isCurrentOperation(opId)) {
+        return;
+      }
+      if (document.value.id === id || document.value.id === null) {
+        const response = await loadLevel(CLASSIC_LEVEL_ID);
+        if (!isCurrentOperation(opId)) {
+          return;
+        }
+        setDocument({ ...parseAscii2d(response.ascii2d), id: response.id, version: response.version });
+      }
+      status.value = "clean";
+    } catch (error) {
+      if (!isCurrentOperation(opId)) {
+        return;
+      }
+      status.value = "error";
+      errorMessage.value = error instanceof Error ? error.message : String(error);
+    }
+  }
+
   function dispose(): void {
     clearAutosaveTimer();
   }
@@ -284,6 +321,7 @@ export function createLevelSync(initial: LevelDocument): LevelSync {
     notifyChanged,
     flush,
     reloadAuthoritative,
+    removeLevel,
     dispose,
   };
 }

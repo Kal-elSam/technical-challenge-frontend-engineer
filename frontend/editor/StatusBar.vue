@@ -12,11 +12,13 @@ const props = defineProps<{
   status: SyncStatus;
   errorMessage: string | null;
   hoverCell: { x: number; y: number } | null;
+  canDeleteLevel: boolean;
 }>();
 
 const emit = defineEmits<{
   "reload-authoritative": [];
   retry: [];
+  "delete-level": [];
 }>();
 
 const STATUS_LABEL: Record<SyncStatus, string> = {
@@ -60,6 +62,14 @@ const isBusy = computed(() => props.status === "loading" || props.status === "sa
       <span class="banner-icon">✕</span>
       <span>{{ errorMessage ?? "Could not reach the server." }}</span>
       <button type="button" @click="emit('retry')">Retry</button>
+      <button
+        v-if="canDeleteLevel"
+        type="button"
+        class="banner-button--danger"
+        @click="emit('delete-level')"
+      >
+        Delete level
+      </button>
     </div>
   </div>
 </template>
@@ -195,5 +205,14 @@ const isBusy = computed(() => props.status === "loading" || props.status === "sa
 
 .banner button:hover {
   background: var(--accent-strong);
+}
+
+.banner-button--danger {
+  background: rgba(224, 96, 96, 0.22) !important;
+  color: #ffd0d0 !important;
+}
+
+.banner-button--danger:hover {
+  background: rgba(224, 96, 96, 0.35) !important;
 }
 </style>

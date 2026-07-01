@@ -4,6 +4,8 @@ Endpoints (the editor in ``frontend/editor/`` is the client):
 
     GET  /level/load?id=...   load a stored level
     POST /level/store         create (no id) or update (id + base_version)
+    POST /level/delete        remove a stored level (not classic)
+    DELETE /level/delete?id=...  same as POST (legacy)
     POST /level/generate      deterministic board from (seed, size)
     GET  /levels              list known level ids
 
@@ -19,6 +21,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from ..generator import CLASSIC, generate
 from .models import (
+    DeleteRequest,
     GenerateRequest,
     GenerateResponse,
     LevelResponse,
@@ -86,6 +89,29 @@ def generate_level(request: GenerateRequest) -> GenerateResponse:
 @app.get("/levels")
 def list_levels() -> list[str]:
     return store.ids()
+
+
+def _delete_level(level_id: str) -> dict[str, bool]:
+    if level_id == CLASSIC_LEVEL_ID:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Cannot delete the built-in {CLASSIC_LEVEL_ID!r} level",
+        )
+    try:
+        store.delete(level_id)
+    except LevelNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"ok": True}
+
+
+@app.post("/level/delete")
+def delete_level_post(request: DeleteRequest) -> dict[str, bool]:
+    return _delete_level(request.id)
+
+
+@app.delete("/level/delete")
+def delete_level_query(id: str = Query(...)) -> dict[str, bool]:
+    return _delete_level(id)
 
 
 def main() -> None:

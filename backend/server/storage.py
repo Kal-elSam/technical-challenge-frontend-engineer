@@ -98,6 +98,13 @@ class LevelStore:
             self._save()
         return updated
 
+    def delete(self, level_id: str) -> None:
+        with self._lock:
+            if level_id not in self._levels:
+                raise LevelNotFound(level_id)
+            del self._levels[level_id]
+            self._save()
+
     def ids(self) -> list[str]:
         with self._lock:
             return list(self._levels.keys())

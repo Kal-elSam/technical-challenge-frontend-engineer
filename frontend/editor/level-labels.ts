@@ -52,6 +52,19 @@ export function saveLevelLabel(id: string, label: string): void {
   storage.setItem(STORAGE_KEY, JSON.stringify(labels));
 }
 
+export function forgetLevelLabel(id: string): void {
+  const storage = readStorage();
+  if (storage === null) {
+    return;
+  }
+  const labels = loadLevelLabels();
+  if (!(id in labels)) {
+    return;
+  }
+  delete labels[id];
+  storage.setItem(STORAGE_KEY, JSON.stringify(labels));
+}
+
 /** Sorted options for a <select>: classic first, then saved labels, then
  * numbered fallbacks for legacy uuid ids. */
 export function buildLevelOptions(ids: readonly string[], labels: LevelLabels): LevelOption[] {
