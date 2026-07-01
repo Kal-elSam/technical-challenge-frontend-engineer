@@ -5,9 +5,20 @@ import { loadLevelPayload } from "./api.ts";
 import { CLASSIC_LEVEL_ID, labelForLevelId, loadLevelLabels } from "../editor/level-labels.ts";
 import { CLASSIC, Direction, Engine, div, fromNum, type Ghost, type Player, type Pellet, type PowerPellet } from "./engine/index.ts";
 import { renderGame } from "./render.ts";
+import {
+  GAME_SPEED_LABEL,
+  GAME_SPEEDS,
+  loadGameSpeed,
+  MAX_SIMULATION_TICKS_PER_FRAME,
+  msPerSimulationTick,
+  saveGameSpeed,
+  TICKS_PER_SECOND,
+  type GameSpeed,
+} from "./settings.ts";
 
 const BLOCK_SIZE = 16;
 const BOARD_PADDING = 12;
+const INTEGRATION_STEP = div(fromNum(1), fromNum(8));
 
 const engine = ref<Engine | null>(null);
 const players = ref<readonly Player[]>([]);
@@ -18,12 +29,15 @@ const levelWidth = ref(0);
 const levelHeight = ref(0);
 const fps = ref(0);
 const levelId = ref(CLASSIC_LEVEL_ID);
+const levelAscii2d = ref<string>(CLASSIC);
 const levelLabel = computed(() => labelForLevelId(levelId.value, loadLevelLabels()));
 const loadNotice = ref<string | null>(null);
 const heldDirection = ref<Direction | null>(null);
+const gameSpeed = ref<GameSpeed>(loadGameSpeed());
 
 let frameId = 0;
 let lastFrameTime = 0;
+let simulationAccumulator = 0;
 let frameCount = 0;
 let fpsWindowStart = 0;
 
@@ -58,14 +72,31 @@ function draw(ctx: CanvasRenderingContext2D): void {
   });
 }
 
+function runSimulationTicks(): void {
+  if (engine.value === null) {
+    return;
+  }
+  const msPerTick = msPerSimulationTick(gameSpeed.value);
+  let ticksRun = 0;
+  while (simulationAccumulator >= msPerTick && ticksRun < MAX_SIMULATION_TICKS_PER_FRAME) {
+    engine.value.tick({ direction: heldDirection.value });
+    simulationAccumulator -= msPerTick;
+    ticksRun += 1;
+  }
+  if (ticksRun > 0) {
+    syncState();
+  }
+}
+
 function tickFrame(timestamp: number): void {
   if (engine.value === null) {
     return;
   }
 
   if (lastFrameTime > 0) {
-    engine.value.tick({ direction: heldDirection.value });
-    syncState();
+    // Clamp huge deltas (tab backgrounded) so we do not burst too many turns at once.
+    simulationAccumulator += Math.min(timestamp - lastFrameTime, 250);
+    runSimulationTicks();
   }
   lastFrameTime = timestamp;
 
@@ -106,7 +137,19 @@ function directionFromKey(key: string): Direction | null {
   return null;
 }
 
+function restartLevel(): void {
+  heldDirection.value = null;
+  simulationAccumulator = 0;
+  engine.value = new Engine(levelAscii2d.value, INTEGRATION_STEP);
+  syncState();
+}
+
 function onKeyDown(event: KeyboardEvent): void {
+  if (event.key === "r" || event.key === "R") {
+    restartLevel();
+    event.preventDefault();
+    return;
+  }
   const direction = directionFromKey(event.key);
   if (direction !== null) {
     heldDirection.value = direction;
@@ -122,22 +165,32 @@ function onKeyUp(event: KeyboardEvent): void {
   }
 }
 
+function onSpeedChange(): void {
+  saveGameSpeed(gameSpeed.value);
+}
+
+async function initEngine(): Promise<void> {
+  const requestedId = new URLSearchParams(window.location.search).get("level") ?? CLASSIC_LEVEL_ID;
+  levelId.value = requestedId;
+  try {
+    const level = await loadLevelPayload(requestedId);
+    levelAscii2d.value = level.ascii2d;
+    engine.value = new Engine(level.ascii2d, INTEGRATION_STEP);
+  } catch {
+    loadNotice.value =
+      requestedId === CLASSIC_LEVEL_ID
+        ? "Could not reach the level server — is `uv run backend` running?"
+        : `Could not load "${requestedId}" — playing classic instead.`;
+    levelId.value = CLASSIC_LEVEL_ID;
+    levelAscii2d.value = CLASSIC;
+    engine.value = new Engine(CLASSIC, INTEGRATION_STEP);
+  }
+  syncState();
+}
+
 onMounted(() => {
   void (async () => {
-    const requestedId = new URLSearchParams(window.location.search).get("level") ?? CLASSIC_LEVEL_ID;
-    levelId.value = requestedId;
-    try {
-      const level = await loadLevelPayload(requestedId);
-      engine.value = new Engine(level.ascii2d, div(fromNum(1), fromNum(8)));
-    } catch {
-      loadNotice.value =
-        requestedId === CLASSIC_LEVEL_ID
-          ? "Could not reach the level server — is `uv run backend` running?"
-          : `Could not load "${requestedId}" — playing classic instead.`;
-      levelId.value = CLASSIC_LEVEL_ID;
-      engine.value = new Engine(CLASSIC, div(fromNum(1), fromNum(8)));
-    }
-    syncState();
+    await initEngine();
     frameId = requestAnimationFrame(tickFrame);
   })();
 
@@ -160,17 +213,33 @@ onUnmounted(() => {
         Maze Chase
       </h1>
       <p v-if="loadNotice" class="notice">{{ loadNotice }}</p>
-      <p v-else class="hint">Arrow keys to move</p>
+      <p v-else class="hint">Arrow keys to move · R or Restart to try again</p>
     </header>
 
     <section class="stage">
       <div class="hud">
         <span class="chip" :title="levelId">{{ levelLabel }}</span>
         <span class="chip">{{ levelWidth }}×{{ levelHeight }}</span>
-        <span class="chip">{{ fps }} FPS</span>
         <span class="chip">players {{ players.length }}</span>
         <span class="chip">ghosts {{ ghosts.length }}</span>
         <span class="chip">pellets {{ pellets.length }}</span>
+        <label class="chip chip--control" title="Simulation speed (independent of monitor FPS)">
+          Speed
+          <select v-model="gameSpeed" class="speed-select" @change="onSpeedChange">
+            <option v-for="speed in GAME_SPEEDS" :key="speed" :value="speed">
+              {{ GAME_SPEED_LABEL[speed] }} ({{ TICKS_PER_SECOND[speed] }} tps)
+            </option>
+          </select>
+        </label>
+        <span class="chip chip--muted" title="Display refresh rate">{{ fps }} FPS</span>
+        <button
+          type="button"
+          class="chip chip--button"
+          title="Reset level (R)"
+          @click="restartLevel"
+        >
+          Restart
+        </button>
       </div>
 
       <div class="canvas-shell">
@@ -248,6 +317,51 @@ onUnmounted(() => {
   font-size: 0.78rem;
   font-variant-numeric: tabular-nums;
   padding: 4px 10px;
+}
+
+.chip--muted {
+  color: var(--text-muted);
+  border-color: transparent;
+  background: transparent;
+}
+
+.chip--control {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.speed-select {
+  appearance: none;
+  background: var(--surface-1, #121218);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  color: var(--text-primary, #f0f0f5);
+  cursor: pointer;
+  font-size: 0.78rem;
+  padding: 2px 6px;
+}
+
+.speed-select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.chip--button {
+  cursor: pointer;
+  font: inherit;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.chip--button:hover {
+  background: var(--surface-3, #1a1a22);
+  border-color: var(--border-strong);
+  color: var(--text-primary, #f0f0f5);
+}
+
+.chip--button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .canvas-shell {
