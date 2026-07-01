@@ -1,0 +1,20 @@
+# JS/Bun
+node_modules/
+dist/
+*.log
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Backend runtime data (JSON-file level persistence; regenerated on run)
+backend/server/data/
+
+# Editor
+.DS_Store
+
+# Local agent tooling artifacts (not part of the project)
+.atl/
+.cursor/
